@@ -1,30 +1,40 @@
 import torch
 from torch import nn
+import torch.functional as F
+import numpy as np
+import matplotlib.pyplot as plt
+
+from torch.utils.data import Dataset, DataLoader
+from fra_eng_dataset import FraEngDataset, fra_eng_dataset_collate
+from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
+
+device = 'cpu'
+if torch.cuda.is_available():
+    device = 'cuda'
 
 class SelfAttentionHead(nn.Module):
     def __init__(self, d_model):
         super().__init__()
 
         self.d_model = d_model
-
         self.K = nn.Linear(d_model, d_model)
         self.V = nn.Linear(d_model, d_model)
         self.Q = nn.Linear(d_model, d_model)
 
-        self.FF = nn.Linear(d_model, d_model)
-
-    def forward(self, x, mask):
+    def forward(self, src, src_mask):
         # X shape: [N, SEQ, D_MODEL]
 
         #SelfAttention:
-        keys = self.K.forward(x)
-        values = self.V.forward(x)
-        queries = self.Q.forward(x)
+        keys = self.K.forward(src)
+        values = self.V.forward(src)
+        queries = self.Q.forward(src)
 
         sqrt_d = self.d_model ** 0.5
 
         att = torch.matmul(queries, keys.transpose(1,2)) / sqrt_d
         # shape: [N, SEQ, SEQ]
+        att = att + src_mask
+        # Broadcast mask so that attention does not attend to positions outside sentence
         att_softmax = torch.softmax(att, dim=1)
         # shape: [N, SEQ, SEQ]
         att_out = torch.matmul(att_softmax, values)
@@ -41,37 +51,39 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList([SelfAttentionHead(d_model) for i in range(num_heads)])
         self.linear = nn.Linear(num_heads * d_model, d_model)
 
-    def forward(self, x):
+    def forward(self, src, src_mask):
 
         out_cat = None
         for i in range(self.num_heads):
             if i == 0:
-                out_cat = self.heads[i].forward(x)
+                out_cat = self.heads[i].forward(src, src_mask)
             else:
-                out_cat = torch.cat(out_cat, self.heads[i], dim=2)
+                out_cat = torch.cat([out_cat, self.heads[i].forward(src, src_mask)], dim=2)
 
         ret = self.linear.forward(out_cat)
 
         return ret
 
 class EncoderLayer(nn.Module):
-    def __init__(self, d_model, num_att_heads):
+    def __init__(self, d_model, num_att_heads, ff_dim = 2048):
         super().__init__()
 
         self.multihead_attention = MultiHeadAttention(d_model, num_att_heads)
         self.att_layer_norm = torch.nn.LayerNorm(d_model)
 
-        self.linear = nn.Linear(d_model, d_model)
+        self.linear1 = nn.Linear(d_model, ff_dim)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(ff_dim, d_model)
         self.lin_layer_norm = torch.nn.LayerNorm(d_model)
 
-    def forward(self, x):
+    def forward(self, src, src_mask):
 
-        res1 = x
-        x = self.multihead_attention.forward(x)
+        res1 = src
+        x = self.multihead_attention.forward(src, src_mask)
         x = self.att_layer_norm.forward(x + res1)
 
         res2 = x
-        x = self.linear.forward(x)
+        x = self.linear2(self.relu(self.linear1.forward(x)))
         x = self.lin_layer_norm(x + res2)
 
         return x
@@ -82,38 +94,140 @@ class Encoder(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList([EncoderLayer(d_model, num_att_heads) for i in range(num_layers)])
 
-    def forward(self, x):
+    def forward(self,src, src_mask):
+        x = src
         for layer in self.layers:
-            x = layer.forward(x)
+            x = layer.forward(x, src_mask)
 
         return x
 
 class PositionalEncoding(nn.Module):
-    def __init__(self):
+    def __init__(self, d_model):
         super().__init__()
+        self.d_model = d_model
 
-    def forward(self, pos):
+        self.sin_args = torch.zeros(1, self.d_model).to(device)
+        self.cos_args = torch.zeros(1, self.d_model).to(device)
+        for i in range(self.d_model//2):
+            self.sin_args[0,i * 2] = 10000**(2.*i/self.d_model)
+            self.cos_args[0,i * 2 + 1] = 10000**(2.*i/self.d_model)
 
+        self.sin_args_filled = (self.sin_args > 1e-10).float()
+        self.sin_args = self.sin_args + (self.sin_args < 1e-10).float()
 
+        self.cos_args_filled = (self.cos_args > 1e-10).float()
+        self.cos_args = self.cos_args + (self.cos_args < 1e-10).float()
+
+    def forward(self, x):
+        for pos in range(x.size()[-2]):
+            x[:,pos,:] = x[:,pos,:] + \
+                         torch.sin(pos / self.sin_args) * self.sin_args_filled + \
+                         torch.cos(pos / self.cos_args) * self.cos_args_filled
+
+        return x
+
+# positional_enc = PositionalEncoding(256)
+# data = torch.zeros(1, 50, 256)
+# data_pos_enc = positional_enc.forward(data)
+#
+# enc_np = data_pos_enc.squeeze(dim=0).numpy()
+# plt.imshow(enc_np)
+# plt.show()
 
 class Transformer(nn.Module):
-    def __init__(self, num_layers, d_model, num_att_heads):
+    def __init__(self, num_layers, d_model, num_att_heads, input_dict_size, output_dict_size):
         super().__init__()
 
+        #TODO: returning memory from encoder and decoder
+        #TODO: decoder
 
-        #TODO: masking, positional encoding
+        self.input_emb = nn.Embedding(input_dict_size, d_model)
 
-        self.positional_encoder = None
+        self.positional_encoder = PositionalEncoding(d_model)
         self.encoder = Encoder(num_layers, d_model, num_att_heads)
         self.decoder = None
 
-    def forward(self, x):
-        x = self.encoder(x)
+        self.outp_logits = nn.Linear(d_model, output_dict_size)
+        self.softmax = nn.Softmax(dim=2)
+
+    def forward(self, src, src_mask):
+
+        x = self.input_emb.forward(src.squeeze(dim=2))
+        x = self.positional_encoder.forward(x)
+
+        #TODO: for now will use just encoder for language modeling task
+        x = self.encoder.forward(x, src_mask)
+        x = self.outp_logits.forward(x)
+        x = self.softmax(x)
+
+        return x
 
 
+BATCH_SIZE = 32
+LEARNING_RATE = 1e-4
+EPOCHS = 10
 
 
+dataset = FraEngDataset()
+sentences_loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True, collate_fn=fra_eng_dataset_collate)
+
+in_dict_size = dataset.get_fra_dict_size()
+out_dict_size = dataset.get_eng_dict_size()
+
+transformer_model = Transformer(
+    num_layers=6,
+    d_model=256,
+    num_att_heads=8,
+    input_dict_size=in_dict_size,
+    output_dict_size=in_dict_size # We do language modeling so we will use in_dict_size for output as well
+)
 
 
+def get_square_mask(seq_len):
+    mask = (torch.triu(torch.ones(seq_len, seq_len)) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+    return mask.to(device)
 
+def get_padding_mask(input, val1 = float('-inf'), val2 = float(0.0)):
+    mask = torch.ones(input.size())
+    mask = mask.float().masked_fill(input == 0, val1).masked_fill(input > 0, val2)
+    return mask.to(device)
+
+
+def get_one_hot(x, out_dim, mask):
+
+    tens = x.view(-1)
+    tens_one_hot = torch.zeros(list(tens.size()) + [out_dim])
+    for i in range(len(tens)):
+        tens_one_hot[i,tens[i]] = 1
+
+    tens_one_hot = tens_one_hot.view(list(x.size()) + [out_dim])
+    tens_one_hot = tens_one_hot * mask
+    return tens_one_hot.to(device)
+
+
+optimizer = torch.optim.Adam(transformer_model.parameters(), lr = 1e-4)
+
+for epoch in range(EPOCHS):
+    for sentences in sentences_loader:
+
+        in_sentences = sentences['fra_sentences']
+        in_lens = sentences['fra_lens']
+        out_sentences = sentences['eng_sentences']
+        out_lens = sentences['eng_lens']
+
+        padded_src = pad_sequence(in_sentences, padding_value = 0, batch_first=True).to(device)
+        src_pad_mask = get_padding_mask(padded_src)
+
+        pred = transformer_model(src = padded_src, src_mask = src_pad_mask)
+
+        one_hot_mask = get_padding_mask(padded_src, val1 = float(0.0), val2 = float(1.0))
+        y_one_hot = get_one_hot(padded_src.squeeze(dim=2), in_dict_size, mask = one_hot_mask)
+
+        loss = - torch.sum(torch.log(pred) * y_one_hot)
+        print(loss)
+
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
 
