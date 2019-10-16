@@ -33,9 +33,9 @@ class SelfAttentionHead(nn.Module):
 
         att = torch.matmul(queries, keys.transpose(1,2)) / sqrt_d
         # shape: [N, SEQ, SEQ]
-        att = att + src_mask
         # Broadcast mask so that attention does not attend to positions outside sentence
-        att_softmax = torch.softmax(att, dim=1)
+        att = att + src_mask.transpose(1,2)
+        att_softmax = torch.softmax(att, dim=2)
         # shape: [N, SEQ, SEQ]
         att_out = torch.matmul(att_softmax, values)
         # shape: [N, SEQ, D_MODEL]
