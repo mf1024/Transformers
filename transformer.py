@@ -163,7 +163,7 @@ class Transformer(nn.Module):
         return x
 
 
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 LEARNING_RATE = 1e-4
 EPOCHS = 10
 
@@ -176,28 +176,28 @@ out_dict_size = dataset.get_eng_dict_size()
 
 transformer_model = Transformer(
     num_layers=6,
-    d_model=256,
+    d_model=1024,
     num_att_heads=8,
     input_dict_size=in_dict_size,
     output_dict_size=in_dict_size # We do language modeling so we will use in_dict_size for output as well
-)
+).to(device)
 
 
 def get_square_mask(seq_len):
-    mask = (torch.triu(torch.ones(seq_len, seq_len)) == 1).transpose(0, 1)
+    mask = (torch.triu(torch.ones(seq_len, seq_len).to(device)) == 1).transpose(0, 1)
     mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-    return mask.to(device)
+    return mask
 
 def get_padding_mask(input, val1 = float('-inf'), val2 = float(0.0)):
-    mask = torch.ones(input.size())
+    mask = torch.ones(input.size()).to(device)
     mask = mask.float().masked_fill(input == 0, val1).masked_fill(input > 0, val2)
-    return mask.to(device)
+    return mask
 
 
 def get_one_hot(x, out_dim, mask):
 
     tens = x.view(-1)
-    tens_one_hot = torch.zeros(list(tens.size()) + [out_dim])
+    tens_one_hot = torch.zeros(list(tens.size()) + [out_dim]).to(device)
     for i in range(len(tens)):
         tens_one_hot[i,tens[i]] = 1
 
