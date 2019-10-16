@@ -171,8 +171,7 @@ EPOCHS = 10
 dataset = FraEngDataset()
 sentences_loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True, collate_fn=fra_eng_dataset_collate)
 
-in_dict_size = dataset.get_fra_dict_size()
-out_dict_size = dataset.get_eng_dict_size()
+in_dict_size = dataset.get_eng_dict_size()
 
 transformer_model = Transformer(
     num_layers=6,
@@ -208,18 +207,46 @@ def get_one_hot(x, out_dim, mask):
 
 optimizer = torch.optim.Adam(transformer_model.parameters(), lr = 1e-4)
 
+def print_results(src, pred):
+
+    for i in range(len(src)):
+        src_seq = torch.squeeze(src[i], dim=1)
+        pred_seq = torch.argmax(pred[i], dim=1)
+
+        src_sentence = ''
+        for word_idx in src_seq:
+            src_sentence += dataset.eng_token_to_text[word_idx] + ' '
+
+        pred_sentence = ''
+        for word_idx in pred_seq:
+            pred_sentence += dataset.eng_token_to_text[word_idx] + ' '
+
+        print("Source sentence is:")
+        print(src_sentence)
+        print("Pred sentence is:")
+        print(pred_sentence)
+
+
+iterations = 0
+
 for epoch in range(EPOCHS):
     for sentences in sentences_loader:
 
-        in_sentences = sentences['fra_sentences']
-        in_lens = sentences['fra_lens']
-        out_sentences = sentences['eng_sentences']
-        out_lens = sentences['eng_lens']
+        # in_sentences = sentences['fra_sentences']
+        # in_lens = sentences['fra_lens']
+        # out_sentences = sentences['eng_sentences']
+        # out_lens = sentences['eng_lens']
+        in_sentences = sentences['eng_sentences']
 
         padded_src = pad_sequence(in_sentences, padding_value = 0, batch_first=True).to(device)
         src_pad_mask = get_padding_mask(padded_src)
 
         pred = transformer_model(src = padded_src, src_mask = src_pad_mask)
+
+        iterations = iterations + 1
+        if iterations == 100:
+            print_results(padded_src, pred)
+            iterations = 0
 
         one_hot_mask = get_padding_mask(padded_src, val1 = float(0.0), val2 = float(1.0))
         y_one_hot = get_one_hot(padded_src.squeeze(dim=2), in_dict_size, mask = one_hot_mask)
