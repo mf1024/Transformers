@@ -209,9 +209,11 @@ def get_one_hot(x, out_dim, mask):
 
 optimizer = torch.optim.Adam(transformer_model.parameters(), lr = 1e-4)
 
-def print_results(src, pred):
+def print_some_outputs(src, pred):
 
     for i in range(len(src)):
+        if i > 10:
+            break
         src_seq = torch.squeeze(src[i], dim=1)
         pred_seq = torch.argmax(pred[i], dim=1)
 
@@ -227,6 +229,40 @@ def print_results(src, pred):
         print(src_sentence)
         print("Pred sentence is:")
         print(pred_sentence)
+
+def generate_some_sentences(num_sentences = 25):
+
+    transformer_model.eval()
+
+    with torch.no_grad():
+        for i in range(num_sentences):
+            snt = torch.ones((1,1,1)) * dataset.get_eng_start_code()
+            snt = snt.long()
+
+            sent_idxes = []
+
+            for i in range(25):
+                pred = transformer_model.forward(
+                    src = snt,
+                    src_padding_mask = torch.zeros_like(snt).float(),
+                    src_subsq_mask = get_square_subsequent_mask(snt.size()[1]),
+                )
+                next_word_softmax = pred[0,i,:].detach().numpy()
+                next_word = np.random.choice(len(next_word_softmax), p=next_word_softmax)
+                snt = torch.cat([snt, torch.ones((1,1,1)).long() * next_word], dim=1)
+
+                sent_idxes.append(next_word)
+
+                if next_word == dataset.get_eng_eos_code():
+                    break
+
+            sent = ''
+            for word_idx in sent_idxes:
+                sent = f"{sent} {dataset.eng_token_to_text[word_idx]}"
+
+            print(sent)
+
+    transformer_model.train()
 
 
 iterations = 0
@@ -261,7 +297,8 @@ for epoch in range(EPOCHS):
 
         iterations = iterations + 1
         if iterations == 100:
-            print_results(padded_src, pred)
+            print_some_outputs(padded_src, pred)
+            generate_some_sentences()
             iterations = 0
 
         #Creating one hot mask to zero one hot vectors corresponding to padded elements
