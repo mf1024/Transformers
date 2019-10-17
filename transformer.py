@@ -67,26 +67,28 @@ class MultiHeadAttention(nn.Module):
         return ret
 
 class EncoderLayer(nn.Module):
-    def __init__(self, d_model, num_att_heads, ff_dim = 2048):
+    def __init__(self, d_model, num_att_heads, ff_dim = 2048, dropout = 0.1):
         super().__init__()
 
         self.multihead_attention = MultiHeadAttention(d_model, num_att_heads)
-        self.att_layer_norm = torch.nn.LayerNorm(d_model)
+        self.att_sublayer_norm = torch.nn.LayerNorm(d_model)
 
         self.linear1 = nn.Linear(d_model, ff_dim)
+        self.dropout1 = nn.Dropout(dropout)
         self.relu = nn.ReLU()
         self.linear2 = nn.Linear(ff_dim, d_model)
-        self.lin_layer_norm = torch.nn.LayerNorm(d_model)
+        self.dropout2 = nn.Dropout(dropout)
+        self.lin_sublayer_norm = torch.nn.LayerNorm(d_model)
 
     def forward(self, src, src_padding_mask, src_subsq_mask):
 
         res1 = src
         x = self.multihead_attention.forward(src, src_padding_mask, src_subsq_mask)
-        x = self.att_layer_norm.forward(x + res1)
+        x = self.att_sublayer_norm.forward(x + self.dropout1(res1))
 
         res2 = x
         x = self.linear2(self.relu(self.linear1.forward(x)))
-        x = self.lin_layer_norm(x + res2)
+        x = self.lin_sublayer_norm(x + self.dropout2(res2))
 
         return x
 
@@ -95,11 +97,14 @@ class Encoder(nn.Module):
     def __init__(self, num_layers, d_model, num_att_heads):
         super().__init__()
         self.layers = nn.ModuleList([EncoderLayer(d_model, num_att_heads) for i in range(num_layers)])
+        self.norm = nn.LayerNorm(d_model)
 
     def forward(self,src, src_padding_mask, src_subsq_mask):
         x = src
         for layer in self.layers:
             x = layer.forward(x, src_padding_mask, src_subsq_mask)
+
+        x = self.norm.forward(x)
 
         return x
 
@@ -312,4 +317,3 @@ for epoch in range(EPOCHS):
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
-
