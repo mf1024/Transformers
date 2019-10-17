@@ -57,6 +57,8 @@ class FraEngDataset(Dataset):
                         
                         token_idx = self.eng_token_dict[token]
                         eng_token_sentence.append(token_idx)
+
+                    eng_token_sentence = [self.eng_token_dict['<START>']] + eng_token_sentence
                     eng_token_sentence.append(self.eng_token_dict['<EOS>'])
 
                     fra_token_list = word_tokenize(fra_sentence)
@@ -136,6 +138,7 @@ def fra_eng_dataset_collate(data):
     
     for s in data:
         sent = s['eng']
+
         if len(sent) > MAXMAX_SENTENCE_LEN:
             sent = sent[0:MAXMAX_SENTENCE_LEN]
         eng_sentences.append(sent.unsqueeze(dim=1))
@@ -147,8 +150,8 @@ def fra_eng_dataset_collate(data):
         fra_sentences.append(sent.unsqueeze(dim=1))
         fra_sentence_lens.append(len(sent))
 
-    #Rearrange everything by fra sentence lens
-    sort_idxes = np.argsort(np.array(fra_sentence_lens))[::-1]
+    #Rearrange everything by eng sentence lens
+    sort_idxes = np.argsort(np.array(eng_sentence_lens))[::-1]
     for idx in sort_idxes:
         eng_sentences_sorted.append(eng_sentences[idx])
         eng_sentence_lens_sorted.append(eng_sentence_lens[idx])

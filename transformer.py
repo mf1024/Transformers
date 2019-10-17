@@ -21,7 +21,7 @@ class SelfAttentionHead(nn.Module):
         self.V = nn.Linear(d_model, d_model)
         self.Q = nn.Linear(d_model, d_model)
 
-    def forward(self, src, src_mask):
+    def forward(self, src, src_padding_mask, src_subsq_mask):
         # X shape: [N, SEQ, D_MODEL]
 
         #SelfAttention:
@@ -33,8 +33,10 @@ class SelfAttentionHead(nn.Module):
 
         att = torch.matmul(queries, keys.transpose(1,2)) / sqrt_d
         # shape: [N, SEQ, SEQ]
-        # Broadcast mask so that attention does not attend to positions outside sentence
-        att = att + src_mask.transpose(1,2)
+        # Broadcast padding mask to word attentions so that word attention does not attend to positions outside the sentence
+        att = att + src_padding_mask.transpose(1,2)
+        # Add subsequent mask so that each position can attend only itself and the previous elements
+        att = att + src_subsq_mask.unsqueeze(0)
         att_softmax = torch.softmax(att, dim=2)
         # shape: [N, SEQ, SEQ]
         att_out = torch.matmul(att_softmax, values)
@@ -51,14 +53,14 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList([SelfAttentionHead(d_model) for i in range(num_heads)])
         self.linear = nn.Linear(num_heads * d_model, d_model)
 
-    def forward(self, src, src_mask):
+    def forward(self, src, src_padding_mask, src_subsq_mask):
 
         out_cat = None
         for i in range(self.num_heads):
             if i == 0:
-                out_cat = self.heads[i].forward(src, src_mask)
+                out_cat = self.heads[i].forward(src, src_padding_mask, src_subsq_mask)
             else:
-                out_cat = torch.cat([out_cat, self.heads[i].forward(src, src_mask)], dim=2)
+                out_cat = torch.cat([out_cat, self.heads[i].forward(src, src_padding_mask, src_subsq_mask)], dim=2)
 
         ret = self.linear.forward(out_cat)
 
@@ -76,10 +78,10 @@ class EncoderLayer(nn.Module):
         self.linear2 = nn.Linear(ff_dim, d_model)
         self.lin_layer_norm = torch.nn.LayerNorm(d_model)
 
-    def forward(self, src, src_mask):
+    def forward(self, src, src_padding_mask, src_subsq_mask):
 
         res1 = src
-        x = self.multihead_attention.forward(src, src_mask)
+        x = self.multihead_attention.forward(src, src_padding_mask, src_subsq_mask)
         x = self.att_layer_norm.forward(x + res1)
 
         res2 = x
@@ -94,10 +96,10 @@ class Encoder(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList([EncoderLayer(d_model, num_att_heads) for i in range(num_layers)])
 
-    def forward(self,src, src_mask):
+    def forward(self,src, src_padding_mask, src_subsq_mask):
         x = src
         for layer in self.layers:
-            x = layer.forward(x, src_mask)
+            x = layer.forward(x, src_padding_mask, src_subsq_mask)
 
         return x
 
@@ -150,13 +152,13 @@ class Transformer(nn.Module):
         self.outp_logits = nn.Linear(d_model, output_dict_size)
         self.softmax = nn.Softmax(dim=2)
 
-    def forward(self, src, src_mask):
+    def forward(self, src, src_padding_mask, src_subsq_mask):
 
         x = self.input_emb.forward(src.squeeze(dim=2))
         x = self.positional_encoder.forward(x)
 
         #TODO: for now will use just encoder for language modeling task
-        x = self.encoder.forward(x, src_mask)
+        x = self.encoder.forward(x, src_padding_mask, src_subsq_mask)
         x = self.outp_logits.forward(x)
         x = self.softmax(x)
 
@@ -182,7 +184,7 @@ transformer_model = Transformer(
 ).to(device)
 
 
-def get_square_mask(seq_len):
+def get_square_subsequent_mask(seq_len):
     mask = (torch.triu(torch.ones(seq_len, seq_len).to(device)) == 1).transpose(0, 1)
     mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
     return mask
@@ -236,19 +238,32 @@ for epoch in range(EPOCHS):
         # in_lens = sentences['fra_lens']
         # out_sentences = sentences['eng_sentences']
         # out_lens = sentences['eng_lens']
-        in_sentences = sentences['eng_sentences']
+        src_sentences = sentences['eng_sentences']
+        tgt_sentences = []
 
-        padded_src = pad_sequence(in_sentences, padding_value = 0, batch_first=True).to(device)
-        src_pad_mask = get_padding_mask(padded_src)
+        for sentence in src_sentences:
+            tgt_sentences.append(sentence[1:])
 
-        pred = transformer_model(src = padded_src, src_mask = src_pad_mask)
+        padded_src = pad_sequence(src_sentences, padding_value = 0, batch_first=True).to(device)
+        padded_tgt = pad_sequence(tgt_sentences, padding_value = 0, batch_first=True).to(device)
+
+        src_padding_mask = get_padding_mask(padded_src)
+        src_subsq_mask = get_square_subsequent_mask(padded_src.size()[1])
+
+        pred = transformer_model(
+            src = padded_src,
+            src_padding_mask = src_padding_mask,
+            src_subsq_mask = src_subsq_mask
+        )
 
         iterations = iterations + 1
         if iterations == 100:
             print_results(padded_src, pred)
             iterations = 0
 
+        #Creating one hot mask to zero one hot vectors corresponding to padded elements
         one_hot_mask = get_padding_mask(padded_src, val1 = float(0.0), val2 = float(1.0))
+
         y_one_hot = get_one_hot(padded_src.squeeze(dim=2), in_dict_size, mask = one_hot_mask)
 
         loss = - torch.sum(torch.log(pred) * y_one_hot)
