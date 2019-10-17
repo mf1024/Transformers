@@ -244,6 +244,9 @@ for epoch in range(EPOCHS):
         for sentence in src_sentences:
             tgt_sentences.append(sentence[1:])
 
+        for sent_idx in range(len(src_sentences)):
+            src_sentences[sent_idx] = src_sentences[sent_idx][:-1]
+
         padded_src = pad_sequence(src_sentences, padding_value = 0, batch_first=True).to(device)
         padded_tgt = pad_sequence(tgt_sentences, padding_value = 0, batch_first=True).to(device)
 
@@ -262,9 +265,9 @@ for epoch in range(EPOCHS):
             iterations = 0
 
         #Creating one hot mask to zero one hot vectors corresponding to padded elements
-        one_hot_mask = get_padding_mask(padded_src, val1 = float(0.0), val2 = float(1.0))
+        one_hot_mask = get_padding_mask(padded_tgt, val1 = float(0.0), val2 = float(1.0))
 
-        y_one_hot = get_one_hot(padded_src.squeeze(dim=2), in_dict_size, mask = one_hot_mask)
+        y_one_hot = get_one_hot(padded_tgt.squeeze(dim=2), in_dict_size, mask = one_hot_mask)
 
         loss = - torch.sum(torch.log(pred) * y_one_hot)
         print(loss)
