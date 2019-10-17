@@ -302,7 +302,7 @@ for epoch in range(EPOCHS):
 
         iterations = iterations + 1
         if iterations == 100:
-            print_some_outputs(padded_src, pred)
+            # print_some_outputs(padded_src, pred)
             generate_some_sentences()
             iterations = 0
 
