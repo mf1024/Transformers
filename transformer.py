@@ -170,9 +170,9 @@ class Transformer(nn.Module):
         return x
 
 
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 LEARNING_RATE = 1e-4
-EPOCHS = 10
+EPOCHS = 100
 
 
 dataset = FraEngDataset()
@@ -182,7 +182,7 @@ in_dict_size = dataset.get_eng_dict_size()
 
 transformer_model = Transformer(
     num_layers=6,
-    d_model=1024,
+    d_model=512,
     num_att_heads=8,
     input_dict_size=in_dict_size,
     output_dict_size=in_dict_size # We do language modeling so we will use in_dict_size for output as well
@@ -243,6 +243,7 @@ def generate_some_sentences(num_sentences = 25):
         for i in range(num_sentences):
             snt = torch.ones((1,1,1)) * dataset.get_eng_start_code()
             snt = snt.long()
+            snt = snt.to(device)
 
             sent_idxes = []
 
@@ -252,9 +253,9 @@ def generate_some_sentences(num_sentences = 25):
                     src_padding_mask = torch.zeros_like(snt).float(),
                     src_subsq_mask = get_square_subsequent_mask(snt.size()[1]),
                 )
-                next_word_softmax = pred[0,i,:].detach().numpy()
+                next_word_softmax = pred[0,i,:].to('cpu').detach().numpy()
                 next_word = np.random.choice(len(next_word_softmax), p=next_word_softmax)
-                snt = torch.cat([snt, torch.ones((1,1,1)).long() * next_word], dim=1)
+                snt = torch.cat([snt, torch.ones((1,1,1)).long().to(device) * next_word], dim=1)
 
                 sent_idxes.append(next_word)
 
@@ -312,7 +313,7 @@ for epoch in range(EPOCHS):
         y_one_hot = get_one_hot(padded_tgt.squeeze(dim=2), in_dict_size, mask = one_hot_mask)
 
         loss = - torch.sum(torch.log(pred) * y_one_hot)
-        print(loss)
+        print(loss / torch.sum(y_one_hot))
 
         loss.backward()
         optimizer.step()
