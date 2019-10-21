@@ -22,57 +22,22 @@ class SelfAttentionHead(nn.Module):
         self.V = nn.Linear(d_model, d_model)
         self.Q = nn.Linear(d_model, d_model)
 
-    def forward(self, x, padding_mask = None, subsq_mask = None):
-        # src shape: [N, SEQ, D_MODEL]
-
-        #SelfAttention:
-        keys = self.K.forward(x)
-        values = self.V.forward(x)
-        queries = self.Q.forward(x)
-
-        sqrt_d = self.d_model ** 0.5
-
-        att = torch.matmul(queries, keys.transpose(1,2)) / sqrt_d
-        # att shape: [N, SEQ, SEQ]
-        # Broadcast padding mask to word attentions so that word attention does not attend to positions outside the sentence
-        if padding_mask is not None:
-            att = att + padding_mask.transpose(1,2)
-        # Add subsequent mask so that each position can attend only itself and the previous elements
-        if subsq_mask is not None:
-            att = att + subsq_mask.unsqueeze(0)
-
-        att_softmax = torch.softmax(att, dim=2)
-        # shape: [N, SEQ, SEQ]
-        att_out = torch.matmul(att_softmax, values)
-        # shape: [N, SEQ, D_MODEL]
-
-        return att_out, keys, values
-
-class MemAttentionHead(nn.Module):
-    def __init__(self, d_model):
-        super().__init__()
-
-        self.d_model = d_model
-        self.Q = nn.Linear(d_model, d_model)
-
-    def forward(self, x, padding_mask, subsq_mask, keys = None, values = None):
+    def forward(self, src, src_padding_mask, src_subsq_mask):
         # X shape: [N, SEQ, D_MODEL]
 
-        queries = self.Q.forward(x)
+        #SelfAttention:
+        keys = self.K.forward(src)
+        values = self.V.forward(src)
+        queries = self.Q.forward(src)
 
         sqrt_d = self.d_model ** 0.5
 
         att = torch.matmul(queries, keys.transpose(1,2)) / sqrt_d
-        # att shape: [N, SEQ, SEQ]
-
+        # shape: [N, SEQ, SEQ]
         # Broadcast padding mask to word attentions so that word attention does not attend to positions outside the sentence
-        if padding_mask is not None:
-            att = att + padding_mask.transpose(1,2)
-
+        att = att + src_padding_mask.transpose(1,2)
         # Add subsequent mask so that each position can attend only itself and the previous elements
-        if subsq_mask is not None:
-            att = att + subsq_mask.unsqueeze(0)
-
+        att = att + src_subsq_mask.unsqueeze(0)
         att_softmax = torch.softmax(att, dim=2)
         # shape: [N, SEQ, SEQ]
         att_out = torch.matmul(att_softmax, values)
@@ -81,7 +46,7 @@ class MemAttentionHead(nn.Module):
         return att_out
 
 
-class MultiHeadSelfAttention(nn.Module):
+class MultiHeadAttention(nn.Module):
     def __init__(self, d_model, num_heads):
         super().__init__()
 
@@ -92,40 +57,11 @@ class MultiHeadSelfAttention(nn.Module):
     def forward(self, src, src_padding_mask, src_subsq_mask):
 
         out_cat = None
-        keys = None
-        values = None
-
         for i in range(self.num_heads):
-            head_outp, keys, values = self.heads[i].forward(src, src_padding_mask, src_subsq_mask)
-
             if i == 0:
-                out_cat = head_outp
+                out_cat = self.heads[i].forward(src, src_padding_mask, src_subsq_mask)
             else:
-                out_cat = torch.cat([out_cat, head_outp], dim=2)
-
-        ret = self.linear.forward(out_cat)
-
-        return ret, keys, values
-
-
-class MultiHeadMemAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
-        super().__init__()
-
-        self.num_heads = num_heads
-        self.heads = nn.ModuleList([MemAttentionHead(d_model) for i in range(num_heads)])
-        self.linear = nn.Linear(num_heads * d_model, d_model)
-
-    def forward(self, src, src_padding_mask, src_subsq_mask, keys, values):
-
-        out_cat = None
-        for i in range(self.num_heads):
-            head_outp = self.heads[i].forward(src, src_padding_mask, src_subsq_mask, keys = keys, values = values)
-
-            if i == 0:
-                out_cat = head_outp
-            else:
-                out_cat = torch.cat([out_cat, head_outp], dim=2)
+                out_cat = torch.cat([out_cat, self.heads[i].forward(src, src_padding_mask, src_subsq_mask)], dim=2)
 
         ret = self.linear.forward(out_cat)
 
@@ -135,7 +71,7 @@ class EncoderLayer(nn.Module):
     def __init__(self, d_model, num_att_heads, ff_dim = 2048, dropout = 0.1):
         super().__init__()
 
-        self.multihead_attention = MultiHeadSelfAttention(d_model, num_att_heads)
+        self.multihead_attention = MultiHeadAttention(d_model, num_att_heads)
         self.att_sublayer_norm = torch.nn.LayerNorm(d_model)
 
         self.linear1 = nn.Linear(d_model, ff_dim)
@@ -148,14 +84,14 @@ class EncoderLayer(nn.Module):
     def forward(self, src, src_padding_mask, src_subsq_mask):
 
         res1 = src
-        x, keys, values = self.multihead_attention.forward(src, src_padding_mask, src_subsq_mask)
+        x = self.multihead_attention.forward(src, src_padding_mask, src_subsq_mask)
         x = self.att_sublayer_norm.forward(x + self.dropout1(res1))
 
         res2 = x
         x = self.linear2(self.relu(self.linear1.forward(x)))
         x = self.lin_sublayer_norm(x + self.dropout2(res2))
 
-        return x, keys, values
+        return x
 
 
 class Encoder(nn.Module):
@@ -228,7 +164,7 @@ class Transformer(nn.Module):
         x = self.positional_encoder.forward(x)
 
         #TODO: for now will use just encoder for language modeling task
-        x, keys, values = self.encoder.forward(x, src_padding_mask, src_subsq_mask)
+        x = self.encoder.forward(x, src_padding_mask, src_subsq_mask)
         x = self.outp_logits.forward(x)
         x = self.softmax(x)
 
