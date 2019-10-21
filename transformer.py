@@ -158,6 +158,40 @@ class EncoderLayer(nn.Module):
         return x, keys, values
 
 
+class DecoderLayer(nn.Module):
+    def __init__(self, d_model, num_att_heads, ff_dim = 2048, dropout = 0.1):
+        super().__init__()
+
+        self.multihead_self_attention = MultiHeadSelfAttention(d_model, num_att_heads)
+        self.self_att_sublayer_norm = torch.nn.LayerNorm(d_model)
+
+        self.multihead_mem_attention = MultiHeadMemAttention(d_model, num_att_heads)
+        self.mem_att_sublayer_norm = torch.nn.LayerNorm(d_model)
+
+        self.linear1 = nn.Linear(d_model, ff_dim)
+        self.dropout1 = nn.Dropout(dropout)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(ff_dim, d_model)
+        self.dropout2 = nn.Dropout(dropout)
+        self.lin_sublayer_norm = torch.nn.LayerNorm(d_model)
+
+    def forward(self, x, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values):
+
+        residual_1 = x
+        x, keys, values = self.multihead_self_attention.forward(x, src_padding_mask, src_subsq_mask)
+        x = self.self_att_sublayer_norm.forward(x + self.dropout1(residual_1))
+
+        residual_2 = x
+        x = self.multihead_mem_attention.forward(x, tgt_padding_mask, tgt_subsq_mask, keys = mem_keys, values = mem_values)
+        x = self.mem_att_sublayer_norm.forward(x + self.dropout1(residual_2))
+
+        residual_3 = x
+        x = self.linear2(self.relu(self.linear1.forward(x)))
+        x = self.lin_sublayer_norm(x + self.dropout2(residual_3))
+
+        return x, keys, values
+
+
 class Encoder(nn.Module):
     def __init__(self, num_layers, d_model, num_att_heads):
         super().__init__()
@@ -168,6 +202,22 @@ class Encoder(nn.Module):
         x = src
         for layer in self.layers:
             x = layer.forward(x, src_padding_mask, src_subsq_mask)
+
+        x = self.norm.forward(x)
+
+        return x
+
+
+class Decoder(nn.Module):
+    def __init__(self, num_layers, d_model, num_att_heads):
+        super().__init__()
+        self.layers = nn.ModuleList([EncoderLayer(d_model, num_att_heads) for i in range(num_layers)])
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(self,src, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values):
+        x = src
+        for layer in self.layers:
+            x = layer.forward(x, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values)
 
         x = self.norm.forward(x)
 
