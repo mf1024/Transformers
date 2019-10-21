@@ -214,7 +214,7 @@ class Decoder(nn.Module):
         self.layers = nn.ModuleList([EncoderLayer(d_model, num_att_heads) for i in range(num_layers)])
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self,src, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values):
+    def forward(self,src, tgt, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values):
         x = src
         for layer in self.layers:
             x = layer.forward(x, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values)
@@ -260,25 +260,22 @@ class Transformer(nn.Module):
     def __init__(self, num_layers, d_model, num_att_heads, input_dict_size, output_dict_size):
         super().__init__()
 
-        #TODO: returning memory from encoder and decoder
-        #TODO: decoder
-
         self.input_emb = nn.Embedding(input_dict_size, d_model)
 
         self.positional_encoder = PositionalEncoding(d_model)
         self.encoder = Encoder(num_layers, d_model, num_att_heads)
-        self.decoder = None
+        self.decoder = Decoder(num_layers, d_model, num_att_heads)
 
         self.outp_logits = nn.Linear(d_model, output_dict_size)
         self.softmax = nn.Softmax(dim=2)
 
-    def forward(self, src, src_padding_mask, src_subsq_mask):
+    def forward(self, src, tgt, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask):
 
         x = self.input_emb.forward(src.squeeze(dim=2))
         x = self.positional_encoder.forward(x)
 
-        #TODO: for now will use just encoder for language modeling task
-        x, keys, values = self.encoder.forward(x, src_padding_mask, src_subsq_mask)
+        x, enc_keys, enc_values = self.encoder.forward(src, src_padding_mask, src_subsq_mask)
+        x = self.decoder(src, tgt, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, enc_keys, enc_values)
         x = self.outp_logits.forward(x)
         x = self.softmax(x)
 
@@ -298,14 +295,16 @@ if not os.path.exists(models_path):
 dataset = FraEngDataset()
 sentences_loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True, collate_fn=fra_eng_dataset_collate)
 
-in_dict_size = dataset.get_eng_dict_size()
+in_dict_size = dataset.get_fra_dict_size()
+out_dict_size = dataset.get_eng_dict_size()
+
 
 transformer_model = Transformer(
     num_layers=6,
     d_model=512,
     num_att_heads=8,
     input_dict_size=in_dict_size,
-    output_dict_size=in_dict_size # We do language modeling so we will use in_dict_size for output as well
+    output_dict_size=out_dict_size
 ).to(device)
 
 
@@ -400,15 +399,8 @@ for epoch in range(EPOCHS):
 
     for sentences in sentences_loader:
 
-        src_sentences = sentences['eng_sentences']
-        tgt_sentences = []
-
-        # Target sequence is source sequence shifted by one
-        for sentence in src_sentences:
-            tgt_sentences.append(sentence[1:])
-
-        for sent_idx in range(len(src_sentences)):
-            src_sentences[sent_idx] = src_sentences[sent_idx][:-1]
+        src_sentences = sentences['fra_sentences']
+        tgt_sentences = sentences['eng_sentences']
 
         # Create tensors from token lists
         padded_src = pad_sequence(src_sentences, padding_value=0, batch_first=True).to(device)
@@ -417,10 +409,16 @@ for epoch in range(EPOCHS):
         src_padding_mask = get_padding_mask(padded_src)
         src_subsq_mask = get_square_subsequent_mask(padded_src.size()[1])
 
+        tgt_padding_mask = get_padding_mask(padded_tgt)
+        tgt_subsq_mask = get_square_subsequent_mask(padded_tgt.size()[1])
+
         pred = transformer_model.forward(
             src=padded_src,
+            tgt=padded_tgt,
             src_padding_mask=src_padding_mask,
-            src_subsq_mask=src_subsq_mask
+            src_subsq_mask=src_subsq_mask,
+            tgt_padding_mask=tgt_padding_mask,
+            tgt_subsq_mask=tgt_subsq_mask
         )
 
         # Mask to zero one hot vectors corresponding to padded elements
