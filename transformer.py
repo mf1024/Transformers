@@ -298,14 +298,13 @@ class Transformer(nn.Module):
             )
             dec_x = self.outp_logits.forward(dec_x)
             dec_x = self.softmax(dec_x)
-            next_word_softmax = dec_x[0,idx,:].to('cpu').detach().numpy()
+            next_word_softmax = dec_x[0,idx,:].to('cpu').detach()
+            next_word_idx = torch.argmax(next_word_softmax)
+            snt = torch.cat([snt, torch.ones((1,1,1)).long().to(device) * next_word_idx], dim=1)
 
-            next_word = np.random.choice(len(next_word_softmax), p=next_word_softmax)
-            snt = torch.cat([snt, torch.ones((1,1,1)).long().to(device) * next_word], dim=1)
+            translation_idxes.append(next_word_idx)
 
-            translation_idxes.append(next_word)
-
-            if next_word == tgt_eos_code:
+            if next_word_idx == tgt_eos_code:
                 break
 
         return translation_idxes
