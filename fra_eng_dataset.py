@@ -70,7 +70,8 @@ class FraEngDataset(Dataset):
 
                         token_idx = self.fra_token_dict[token]
                         fra_token_sentence.append(token_idx)
-                        
+
+                    fra_token_sentence = [self.eng_token_dict['<START>']] + eng_token_sentence
                     fra_token_sentence.append(self.fra_token_dict['<EOS>'])
                         
                     self.sentence_list.append(

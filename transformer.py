@@ -55,7 +55,7 @@ class MemAttentionHead(nn.Module):
         self.d_model = d_model
         self.Q = nn.Linear(d_model, d_model)
 
-    def forward(self, x, mem_padding_mask, subsq_mask, keys = None, values = None):
+    def forward(self, x, mem_padding_mask, keys = None, values = None):
 
         # X shape: [N, SEQ, D_MODEL]
 
@@ -113,11 +113,11 @@ class MultiHeadMemAttention(nn.Module):
         self.heads = nn.ModuleList([MemAttentionHead(d_model) for i in range(num_heads)])
         self.linear = nn.Linear(num_heads * d_model, d_model)
 
-    def forward(self, src, src_padding_mask, src_subsq_mask, keys, values):
+    def forward(self, src, src_padding_mask, keys, values):
 
         out_cat = None
         for i in range(self.num_heads):
-            head_outp = self.heads[i].forward(src, src_padding_mask, src_subsq_mask, keys = keys, values = values)
+            head_outp = self.heads[i].forward(src, src_padding_mask, keys = keys, values = values)
 
             if i == 0:
                 out_cat = head_outp
@@ -173,14 +173,14 @@ class DecoderLayer(nn.Module):
         self.dropout3 = nn.Dropout(dropout)
         self.lin_sublayer_norm = torch.nn.LayerNorm(d_model)
 
-    def forward(self, x, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values):
+    def forward(self, x, src_padding_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values):
 
         residual_1 = x
         x, keys, values = self.multihead_self_attention.forward(x, tgt_padding_mask, tgt_subsq_mask)
         x = self.self_att_sublayer_norm.forward(x + self.dropout1(residual_1))
 
         residual_2 = x
-        x = self.multihead_mem_attention.forward(x, src_padding_mask, tgt_subsq_mask, keys = mem_keys, values = mem_values)
+        x = self.multihead_mem_attention.forward(x, src_padding_mask, keys = mem_keys, values = mem_values)
         x = self.mem_att_sublayer_norm.forward(x + self.dropout2(residual_2))
 
         residual_3 = x
@@ -215,10 +215,10 @@ class Decoder(nn.Module):
         self.layers = nn.ModuleList([DecoderLayer(d_model, num_att_heads) for i in range(num_layers)])
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, tgt, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values):
+    def forward(self, tgt, src_padding_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values):
         x = tgt
         for layer in self.layers:
-            x = layer.forward(x, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values)
+            x = layer.forward(x, src_padding_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values)
 
         x = self.norm.forward(x)
 
@@ -261,6 +261,8 @@ class Transformer(nn.Module):
     def __init__(self, num_layers, d_model, num_att_heads, input_dict_size, output_dict_size):
         super().__init__()
 
+        self.max_sent_len = 50
+
         self.input_emb = nn.Embedding(input_dict_size, d_model)
         self.outp_emb = nn.Embedding(output_dict_size, d_model)
 
@@ -271,6 +273,44 @@ class Transformer(nn.Module):
         self.outp_logits = nn.Linear(d_model, output_dict_size)
         self.softmax = nn.Softmax(dim=2)
 
+    def translate(self, src, tgt_start_code, tgt_eos_code, src_padding_mask, src_subsq_mask):
+
+        enc_x = self.input_emb.forward(src.squeeze(dim=2))
+        enc_x = self.positional_encoder.forward(enc_x)
+        enc_keys, enc_values = self.encoder.forward(enc_x, src_padding_mask, src_subsq_mask)
+
+        snt = torch.ones((1,1,1)) * tgt_start_code
+        snt = snt.long()
+        snt = snt.to(device)
+
+        translation_idxes = []
+
+        for idx in range(self.max_sent_len):
+
+            dec_x = self.outp_emb.forward(snt.squeeze(dim=2))
+            dec_x = self.decoder.forward(
+                dec_x,
+                src_padding_mask = src_padding_mask,
+                tgt_padding_mask = torch.zeros_like(snt).float().to(device),
+                tgt_subsq_mask = get_square_subsequent_mask(snt.size()[1]),
+                mem_keys = enc_keys,
+                mem_values = enc_values
+            )
+            dec_x = self.outp_logits.forward(dec_x)
+            dec_x = self.softmax(dec_x)
+            next_word_softmax = dec_x[0,idx,:].to('cpu').detach().numpy()
+
+            next_word = np.random.choice(len(next_word_softmax), p=next_word_softmax)
+            snt = torch.cat([snt, torch.ones((1,1,1)).long().to(device) * next_word], dim=1)
+
+            translation_idxes.append(next_word)
+
+            if next_word == tgt_eos_code:
+                break
+
+        return translation_idxes
+
+
     def forward(self, src, tgt, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask):
 
         enc_x = self.input_emb.forward(src.squeeze(dim=2))
@@ -278,7 +318,7 @@ class Transformer(nn.Module):
         enc_keys, enc_values = self.encoder.forward(enc_x, src_padding_mask, src_subsq_mask)
 
         dec_x = self.outp_emb.forward(tgt.squeeze(dim=2))
-        dec_x = self.decoder.forward(dec_x, src_padding_mask, src_subsq_mask, tgt_padding_mask, tgt_subsq_mask, enc_keys, enc_values)
+        dec_x = self.decoder.forward(dec_x, src_padding_mask, tgt_padding_mask, tgt_subsq_mask, enc_keys, enc_values)
         dec_x = self.outp_logits.forward(dec_x)
         dec_x = self.softmax(dec_x)
 
@@ -334,9 +374,52 @@ def get_one_hot(x, out_dim, mask):
     return tens_one_hot.to(device)
 
 
+def translate_sentences(src_sentences, tgt_sentences, max_sent_num = 15):
+
+    transformer_model.eval()
+
+    with torch.no_grad():
+
+        for snt_idx in range(len(src_sentences)):
+
+            if snt_idx > max_sent_num:
+                break
+
+            src = src_sentences[snt_idx:snt_idx+1]
+
+            padded_src = pad_sequence(src, padding_value=0, batch_first=True).to(device)
+            src_padding_mask = get_padding_mask(padded_src)
+            src_subsq_mask = get_square_subsequent_mask(padded_src.size()[1])
+
+            snt_translation = transformer_model.translate(
+                src = padded_src,
+                tgt_start_code = dataset.get_eng_start_code(),
+                tgt_eos_code = dataset.get_eng_eos_code(),
+                src_padding_mask = src_padding_mask,
+                src_subsq_mask = src_subsq_mask
+            )
+
+            src_sent = ''
+            for word_idx in src_sentences[snt_idx]:
+                src_sent = f"{src_sent} {dataset.fra_token_to_text[word_idx]}"
+
+            tgt_sent = ''
+            for word_idx in tgt_sentences[snt_idx]:
+                tgt_sent = f"{tgt_sent} {dataset.eng_token_to_text[word_idx]}"
+
+            translated_sent = ''
+            for word_idx in snt_translation:
+                translated_sent = f"{translated_sent} {dataset.eng_token_to_text[word_idx]}"
+
+            print(f"Source sentence is: {src_sent}")
+            print(f"Target sentence is: {tgt_sent}")
+            print(f"Model translation is: {translated_sent}")
+
+    transformer_model.train()
+
 optimizer = torch.optim.Adam(transformer_model.parameters(), lr = 1e-4)
 
-iterations = 0
+batch_count = 0
 
 for epoch in range(EPOCHS):
 
@@ -348,15 +431,29 @@ for epoch in range(EPOCHS):
         src_sentences = sentences['fra_sentences']
         tgt_sentences = sentences['eng_sentences']
 
+        batch_count+=1
+        if batch_count == 10:
+            batch_count = 0
+            translate_sentences(src_sentences,tgt_sentences)
+            continue
+
+        tgt_sentences_out = []
+
+        for idx in range(len(tgt_sentences)):
+            tgt_sentences_out.append(tgt_sentences[idx][1:])
+            tgt_sentences[idx] = tgt_sentences[idx][:-1]
+
         # Create tensors from token lists
         padded_src = pad_sequence(src_sentences, padding_value=0, batch_first=True).to(device)
         padded_tgt = pad_sequence(tgt_sentences, padding_value=0, batch_first=True).to(device)
+        padded_tgt_out = pad_sequence(tgt_sentences_out, padding_value=0, batch_first=True).to(device)
 
         src_padding_mask = get_padding_mask(padded_src)
         src_subsq_mask = get_square_subsequent_mask(padded_src.size()[1])
 
         tgt_padding_mask = get_padding_mask(padded_tgt)
         tgt_subsq_mask = get_square_subsequent_mask(padded_tgt.size()[1])
+
 
         pred = transformer_model.forward(
             src=padded_src,
@@ -368,8 +465,8 @@ for epoch in range(EPOCHS):
         )
 
         # Mask to zero one hot vectors corresponding to padded elements
-        one_hot_mask = get_padding_mask(padded_tgt, val1=float(0.0), val2=float(1.0))
-        y_one_hot = get_one_hot(padded_tgt.squeeze(dim=2), out_dict_size, mask=one_hot_mask)
+        one_hot_mask = get_padding_mask(padded_tgt_out, val1=float(0.0), val2=float(1.0))
+        y_one_hot = get_one_hot(padded_tgt_out.squeeze(dim=2), out_dict_size, mask=one_hot_mask)
 
         loss = - torch.sum(torch.log(pred) * y_one_hot)
         print(loss)
