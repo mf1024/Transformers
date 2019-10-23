@@ -133,12 +133,14 @@ class EncoderLayer(nn.Module):
         super().__init__()
 
         self.multihead_attention = MultiHeadSelfAttention(d_model, num_att_heads)
+        self.dropout1 = nn.Dropout(dropout)
         self.att_sublayer_norm = torch.nn.LayerNorm(d_model)
 
         self.linear1 = nn.Linear(d_model, ff_dim)
-        self.dropout1 = nn.Dropout(dropout)
         self.relu = nn.ReLU()
+        self.dropout_lin = nn.Dropout(dropout)
         self.linear2 = nn.Linear(ff_dim, d_model)
+
         self.dropout2 = nn.Dropout(dropout)
         self.lin_sublayer_norm = torch.nn.LayerNorm(d_model)
 
@@ -146,11 +148,11 @@ class EncoderLayer(nn.Module):
 
         residual_1 = src
         x, keys, values = self.multihead_attention.forward(src, src_padding_mask, src_subsq_mask)
-        x = self.att_sublayer_norm.forward(x + self.dropout1(residual_1))
+        x = self.att_sublayer_norm.forward(residual_1 + self.dropout1(x))
 
         residual_2 = x
-        x = self.linear2(self.relu(self.linear1.forward(x)))
-        x = self.lin_sublayer_norm(x + self.dropout2(residual_2))
+        x = self.linear2(self.dropout_lin(self.relu(self.linear1.forward(x))))
+        x = self.lin_sublayer_norm(residual_2 + self.dropout2(x))
 
         return x, keys, values
 
@@ -168,24 +170,25 @@ class DecoderLayer(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
         self.linear1 = nn.Linear(d_model, ff_dim)
+        self.dropout_lin = nn.Dropout(dropout)
         self.relu = nn.ReLU()
         self.linear2 = nn.Linear(ff_dim, d_model)
-        self.dropout3 = nn.Dropout(dropout)
         self.lin_sublayer_norm = torch.nn.LayerNorm(d_model)
+        self.dropout3 = nn.Dropout(dropout)
 
     def forward(self, x, src_padding_mask, tgt_padding_mask, tgt_subsq_mask, mem_keys, mem_values):
 
         residual_1 = x
         x, keys, values = self.multihead_self_attention.forward(x, tgt_padding_mask, tgt_subsq_mask)
-        x = self.self_att_sublayer_norm.forward(x + self.dropout1(residual_1))
+        x = self.self_att_sublayer_norm.forward(residual_1 + self.dropout1(x))
 
         residual_2 = x
         x = self.multihead_mem_attention.forward(x, src_padding_mask, keys = mem_keys, values = mem_values)
-        x = self.mem_att_sublayer_norm.forward(x + self.dropout2(residual_2))
+        x = self.mem_att_sublayer_norm.forward(residual_2 + self.dropout2(x))
 
         residual_3 = x
-        x = self.linear2(self.relu(self.linear1.forward(x)))
-        x = self.lin_sublayer_norm(x + self.dropout3(residual_3))
+        x = self.linear2(self.dropout_lin(self.relu(self.linear1.forward(x))))
+        x = self.lin_sublayer_norm(residual_3 + self.dropout3(x))
 
         return x
 
@@ -274,6 +277,8 @@ class Transformer(nn.Module):
         self.softmax = nn.Softmax(dim=2)
 
     def translate(self, src, tgt_start_code, tgt_eos_code, src_padding_mask, src_subsq_mask):
+
+        # TODO: Beam search
 
         enc_x = self.input_emb.forward(src.squeeze(dim=2))
         enc_x = self.positional_encoder.forward(enc_x)
