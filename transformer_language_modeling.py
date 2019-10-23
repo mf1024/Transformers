@@ -85,11 +85,11 @@ class EncoderLayer(nn.Module):
 
         res1 = src
         x = self.multihead_attention.forward(src, src_padding_mask, src_subsq_mask)
-        x = self.att_sublayer_norm.forward(x + self.dropout1(res1))
+        x = self.att_sublayer_norm.forward(res1 + self.dropout1(x))
 
         res2 = x
         x = self.linear2(self.relu(self.linear1.forward(x)))
-        x = self.lin_sublayer_norm(x + self.dropout2(res2))
+        x = self.lin_sublayer_norm(res2 + self.dropout2(x))
 
         return x
 
