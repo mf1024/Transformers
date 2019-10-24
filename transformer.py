@@ -293,6 +293,7 @@ class Transformer(nn.Module):
         for idx in range(self.max_sent_len):
 
             dec_x = self.outp_emb.forward(snt.squeeze(dim=2))
+            dec_x = self.positional_encoder.forward(dec_x)
             dec_x = self.decoder.forward(
                 dec_x,
                 src_padding_mask = src_padding_mask,
@@ -322,6 +323,7 @@ class Transformer(nn.Module):
         enc_keys, enc_values = self.encoder.forward(enc_x, src_padding_mask, src_subsq_mask)
 
         dec_x = self.outp_emb.forward(tgt.squeeze(dim=2))
+        dec_x = self.positional_encoder.forward(dec_x)
         dec_x = self.decoder.forward(dec_x, src_padding_mask, tgt_padding_mask, tgt_subsq_mask, enc_keys, enc_values)
         dec_x = self.outp_logits.forward(dec_x)
         dec_x = self.softmax(dec_x)
