@@ -1,11 +1,32 @@
 import torch
-from transformers import *
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
+import numpy as np
+
+def choose_from_top(logits, n=5):
+    ind = np.argpartition(logits, -n)[-n:]
+    top_prob = logits[ind]
+    top_prob = top_prob / np.sum(top_prob) # Normalize
+    choice = np.random.choice(n, 1, p = top_prob)
+    token_id = ind[choice][0]
+    return token_id
 
 tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-model = GPT2Model.from_pretrained('gpt2')
+model = GPT2LMHeadModel.from_pretrained('gpt2')
+model.eval()
 
-input_ids = torch.tensor(tokenizer.encode("Joke cracker test.")).unsqueeze(0)  # Batch size 1
-outputs = model(input_ids)
-last_hidden_states = outputs[0]
+cur_ids = torch.tensor(tokenizer.encode(" The Matrix is everywhere. It is all around us. Even now, in this very room. You can see it when you look out your window or when you turn on your television. You can feel it when you go to work... when you go to church... when you pay your taxes. It is the world that has been pulled over your eyes to blind you from the truth. ")).unsqueeze(0)
 
-print("Yes")
+with torch.no_grad():
+
+    for i in range(200):
+
+        outputs = model(cur_ids, labels=cur_ids)
+        loss, logits = outputs[:2]
+        softmax_logits = torch.softmax(logits[0,-1], dim=0) #Take the first(only one) batch and the last predicted embedding
+        next_token_id = choose_from_top(softmax_logits.numpy(), n=3) #Randomly(from the given probability distribution) choose the next word from the top n words
+        cur_ids = torch.cat([cur_ids, torch.ones((1,1)).long() * next_token_id], dim = 1) # Add the last word
+
+    output_list = list(cur_ids.squeeze().numpy())
+    output_text = tokenizer.decode(output_list)
+    print(output_text)
+
