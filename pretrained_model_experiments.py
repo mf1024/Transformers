@@ -5,9 +5,15 @@ import numpy as np
 def choose_from_top(logits, n=5):
     ind = np.argpartition(logits, -n)[-n:]
     top_prob = logits[ind]
+
+    print(f"top_prob {top_prob}")
+    print(f"Sorted {np.sort(logits)[-5:]}")
+
     top_prob = top_prob / np.sum(top_prob) # Normalize
+
     choice = np.random.choice(n, 1, p = top_prob)
     token_id = ind[choice][0]
+    print(f"top_prob {top_prob} ")
     return token_id
 
 tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
@@ -23,7 +29,7 @@ with torch.no_grad():
         outputs = model(cur_ids, labels=cur_ids)
         loss, logits = outputs[:2]
         softmax_logits = torch.softmax(logits[0,-1], dim=0) #Take the first(only one) batch and the last predicted embedding
-        next_token_id = choose_from_top(softmax_logits.numpy(), n=3) #Randomly(from the given probability distribution) choose the next word from the top n words
+        next_token_id = choose_from_top(softmax_logits.numpy(), n=5) #Randomly(from the given probability distribution) choose the next word from the top n words
         cur_ids = torch.cat([cur_ids, torch.ones((1,1)).long() * next_token_id], dim = 1) # Add the last word
 
     output_list = list(cur_ids.squeeze().numpy())
