@@ -9,7 +9,7 @@
 
 #### And here are two notebooks of using pretrained GPT2 model:
 
-- Generating text with a pre-trained GPT2 in PyTorch [jupyter notebook]https://github.com/mf1024/Transformers/blob/master/Generating%20text%20with%20a%20pre-trained%20GPT2%20model.ipynb
+- Generating text with a pre-trained GPT2 in PyTorch [jupyter notebook](https://github.com/mf1024/Transformers/blob/master/Generating%20text%20with%20a%20pre-trained%20GPT2%20model.ipynb)
 
 - Fine-tuning GPT-2 on a jokes dataset in PyTorch [jupyter notebook](https://github.com/mf1024/Transformers/blob/master/Fine-tuning%20GPT2-medium%20in%20PyTorch.ipynb)
 
